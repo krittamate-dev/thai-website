@@ -101,3 +101,14 @@ GOOGLE_CLIENT_ID = config('GOOGLE_CLIENT_ID', default='')
 GOOGLE_SERVICE_ACCOUNT_FILE = BASE_DIR / 'service_account.json'
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 20 * 1024 * 1024  # 20MB
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler'},
+    },
+    'loggers': {
+        'speech': {'handlers': ['console'], 'level': 'INFO'},
+    },
+}

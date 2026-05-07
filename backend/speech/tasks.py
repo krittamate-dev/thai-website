@@ -1,9 +1,13 @@
 import io
+import os
 import wave
+import logging
 import threading
 from django.conf import settings
 from google.cloud import speech
 from google.oauth2 import service_account
+
+logger = logging.getLogger(__name__)
 
 ENCODING_MAP = {
     'mp3':  speech.RecognitionConfig.AudioEncoding.MP3,
@@ -30,7 +34,16 @@ def process_transcription(transcription_id):
         job.status = 'processing'
         job.save(update_fields=['status', 'updated_at'])
 
-        audio_bytes = job.audio_file.read()
+        # Read directly from filesystem path — avoids FieldFile pointer issues
+        audio_path = job.audio_file.path
+        with open(audio_path, 'rb') as f:
+            audio_bytes = f.read()
+
+        logger.info('Transcription %s: %d bytes, file=%s', transcription_id, len(audio_bytes), job.filename)
+
+        if not audio_bytes:
+            raise ValueError('ไฟล์เสียงว่างเปล่า กรุณาอัปโหลดใหม่')
+
         ext = job.filename.rsplit('.', 1)[-1].lower() if '.' in job.filename else 'mp3'
         encoding = ENCODING_MAP.get(ext, speech.RecognitionConfig.AudioEncoding.MP3)
 
@@ -56,6 +69,8 @@ def process_transcription(transcription_id):
         operation = client.long_running_recognize(config=config, audio=audio)
         response = operation.result(timeout=300)
 
+        logger.info('Transcription %s: got %d result segments', transcription_id, len(response.results))
+
         text = ' '.join(
             result.alternatives[0].transcript
             for result in response.results
@@ -63,12 +78,18 @@ def process_transcription(transcription_id):
         )
 
         job.status = 'done'
-        job.result = text or 'ไม่พบเสียงพูดในไฟล์นี้'
-        job.audio_file.delete(save=False)
+        job.result = text if text else 'ไม่พบเสียงพูดในไฟล์นี้'
         job.audio_file = None
         job.save()
 
+        # Clean up audio file after saving job
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass
+
     except Exception as e:
+        logger.error('Transcription %s failed: %s', transcription_id, e)
         try:
             job = Transcription.objects.get(id=transcription_id)
             job.status = 'failed'
