@@ -5,6 +5,7 @@ import Home from './pages/Home.jsx'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
 import Dashboard from './pages/Dashboard.jsx'
+import Speech from './pages/Speech.jsx'
 
 function App() {
   return (
@@ -19,6 +20,14 @@ function App() {
           element={
             <ProtectedRoute>
               <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/speech"
+          element={
+            <ProtectedRoute>
+              <Speech />
             </ProtectedRoute>
           }
         />

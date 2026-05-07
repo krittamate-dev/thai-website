@@ -19,6 +19,9 @@ staticfiles/
 .env
 .env.local
 
+# Credentials
+service_account.json
+
 # Node
 node_modules/
 npm-debug.log*

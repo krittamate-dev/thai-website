@@ -19,6 +19,7 @@ function Navbar() {
         {loggedIn ? (
           <>
             <Link to="/dashboard" className="nav-link">แดชบอร์ด</Link>
+            <Link to="/speech" className="nav-link">แปลงเสียง</Link>
             <button onClick={handleLogout} className="btn-nav">ออกจากระบบ</button>
           </>
         ) : (

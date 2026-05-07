@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'users',
+    'speech',
 ]
 
 MIDDLEWARE = [
@@ -95,3 +96,6 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 GOOGLE_CLIENT_ID = config('GOOGLE_CLIENT_ID', default='')
+GOOGLE_SERVICE_ACCOUNT_FILE = BASE_DIR / 'service_account.json'
+
+DATA_UPLOAD_MAX_MEMORY_SIZE = 20 * 1024 * 1024  # 20MB
