@@ -217,3 +217,133 @@
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+.spinner-sm {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Job list */
+.jobs-section {
+  margin-top: 2.5rem;
+}
+
+.jobs-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.jobs-header h2 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.jobs-count {
+  background: var(--secondary);
+  color: var(--text-light);
+  padding: 0.15rem 0.6rem;
+  border-radius: 50px;
+  font-size: 0.8rem;
+}
+
+.jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.job-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.job-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  gap: 1rem;
+}
+
+.job-row:hover {
+  background: var(--secondary);
+}
+
+.job-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.job-filename {
+  font-weight: 500;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-meta {
+  font-size: 0.8rem;
+  color: var(--text-light);
+}
+
+.job-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+  padding: 0.2rem;
+}
+
+.btn-icon:hover {
+  opacity: 1;
+}
+
+.job-chevron {
+  font-size: 0.7rem;
+  color: var(--text-light);
+}
+
+.job-result {
+  border-top: 1px solid var(--border);
+  padding: 1.25rem;
+  background: #fafafa;
+}
+
+.job-waiting {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--text-light);
+  font-size: 0.9rem;
+}
+
+.result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}

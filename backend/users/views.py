@@ -78,5 +78,6 @@ def google_auth(request):
             'tokens': get_tokens_for_user(user),
             'is_new': created,
         })
-    except ValueError:
-        return Response({'error': 'Token ไม่ถูกต้อง'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        error_msg = str(e) if settings.DEBUG else 'Token ไม่ถูกต้อง'
+        return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
