@@ -10,6 +10,8 @@ from google.cloud import speech
 from google.oauth2 import service_account
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+# Files larger than this use long_running_recognize (async, no 60s limit)
+ASYNC_THRESHOLD = 500 * 1024  # 500KB
 
 ENCODING_MAP = {
     'mp3':  speech.RecognitionConfig.AudioEncoding.MP3,
@@ -22,7 +24,6 @@ ENCODING_MAP = {
 LANGUAGE_MAP = {
     'th': 'th-TH',
     'en': 'en-US',
-    'auto': 'th-TH',
 }
 
 
@@ -42,18 +43,26 @@ def build_config(filename, audio_bytes, language_code):
         'encoding': encoding,
         'language_code': language_code,
         'enable_automatic_punctuation': True,
-        'model': 'latest_long',
     }
 
     if ext == 'wav':
         try:
             with wave.open(io.BytesIO(audio_bytes)) as wf:
                 params['sample_rate_hertz'] = wf.getframerate()
-                params['audio_channel_count'] = wf.getnchannels()
+                if wf.getnchannels() > 1:
+                    params['audio_channel_count'] = wf.getnchannels()
         except Exception:
             params['sample_rate_hertz'] = 16000
 
     return speech.RecognitionConfig(**params)
+
+
+def extract_text(results):
+    return ' '.join(
+        result.alternatives[0].transcript
+        for result in results
+        if result.alternatives
+    )
 
 
 @api_view(['POST'])
@@ -81,13 +90,15 @@ def transcribe(request):
         client = get_client()
         config = build_config(audio_file.name, audio_bytes, language_code)
         audio = speech.RecognitionAudio(content=audio_bytes)
-        response = client.recognize(config=config, audio=audio)
 
-        text = ' '.join(
-            result.alternatives[0].transcript
-            for result in response.results
-            if result.alternatives
-        )
+        if len(audio_bytes) > ASYNC_THRESHOLD:
+            # Use async for longer files — no 60-second limit
+            operation = client.long_running_recognize(config=config, audio=audio)
+            response = operation.result(timeout=300)
+        else:
+            response = client.recognize(config=config, audio=audio)
+
+        text = extract_text(response.results)
 
         return Response({
             'text': text or 'ไม่พบเสียงพูดในไฟล์นี้',
