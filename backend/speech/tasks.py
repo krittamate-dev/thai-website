@@ -2,7 +2,9 @@ import io
 import os
 import time
 import wave
+import tempfile
 import logging
+import subprocess
 import threading
 from django.conf import settings
 from google.cloud import speech
@@ -23,24 +25,41 @@ def get_client():
 
 
 def to_wav_linear16(audio_bytes, filename):
-    """Convert any audio format to mono 16kHz WAV for maximum Speech API compatibility."""
+    """Convert any audio to mono 16kHz WAV using ffmpeg (works on Python 3.13+)."""
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'mp3'
+    tmp_in = tempfile.mktemp(suffix=f'.{ext}')
+    tmp_out = tempfile.mktemp(suffix='.wav')
     try:
-        from pydub import AudioSegment
-        ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'mp3'
-        seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
-        seg = seg.set_frame_rate(16000).set_channels(1)
-        buf = io.BytesIO()
-        seg.export(buf, format='wav')
-        return buf.getvalue()
-    except ImportError:
-        logger.warning('pydub not installed — sending raw audio to Google')
+        with open(tmp_in, 'wb') as f:
+            f.write(audio_bytes)
+
+        result = subprocess.run(
+            ['ffmpeg', '-i', tmp_in, '-ar', '16000', '-ac', '1', '-f', 'wav', tmp_out, '-y', '-loglevel', 'error'],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode())
+
+        with open(tmp_out, 'rb') as f:
+            wav_bytes = f.read()
+
+        logger.info('Converted to WAV: %d bytes', len(wav_bytes))
+        return wav_bytes
+    except FileNotFoundError:
+        logger.warning('ffmpeg not found — sending raw audio to Google')
         return None
     except Exception as e:
-        logger.warning('Audio conversion failed (%s) — sending raw audio', e)
+        logger.warning('Audio conversion failed: %s — sending raw audio', e)
         return None
+    finally:
+        for p in (tmp_in, tmp_out):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 
-def build_config(audio_bytes, filename, language_code, converted):
+def build_config(raw_bytes, filename, language_code, converted):
     if converted:
         return speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -49,7 +68,6 @@ def build_config(audio_bytes, filename, language_code, converted):
             language_code=language_code,
             enable_automatic_punctuation=True,
         )
-
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'mp3'
     encoding_map = {
         'mp3':  speech.RecognitionConfig.AudioEncoding.MP3,
@@ -65,7 +83,7 @@ def build_config(audio_bytes, filename, language_code, converted):
     }
     if ext == 'wav':
         try:
-            with wave.open(io.BytesIO(audio_bytes)) as wf:
+            with wave.open(io.BytesIO(raw_bytes)) as wf:
                 params['sample_rate_hertz'] = wf.getframerate()
                 if wf.getnchannels() > 1:
                     params['audio_channel_count'] = wf.getnchannels()
@@ -102,7 +120,6 @@ def process_transcription(transcription_id):
         if not raw_bytes:
             raise ValueError('ไฟล์เสียงว่างเปล่า กรุณาอัปโหลดใหม่')
 
-        # Convert to WAV for best compatibility; fall back to raw if pydub unavailable
         wav_bytes = to_wav_linear16(raw_bytes, job.filename)
         audio_bytes = wav_bytes if wav_bytes else raw_bytes
         converted = wav_bytes is not None
