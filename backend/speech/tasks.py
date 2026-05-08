@@ -10,14 +10,6 @@ from google.oauth2 import service_account
 
 logger = logging.getLogger(__name__)
 
-ENCODING_MAP = {
-    'mp3':  speech.RecognitionConfig.AudioEncoding.MP3,
-    'wav':  speech.RecognitionConfig.AudioEncoding.LINEAR16,
-    'webm': speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-    'ogg':  speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
-    'flac': speech.RecognitionConfig.AudioEncoding.FLAC,
-}
-
 MAX_WAIT_SECONDS = 900   # 15 minutes max
 POLL_INTERVAL = 5        # check every 5 seconds
 
@@ -30,16 +22,66 @@ def get_client():
     return speech.SpeechClient(credentials=credentials)
 
 
+def to_wav_linear16(audio_bytes, filename):
+    """Convert any audio format to mono 16kHz WAV for maximum Speech API compatibility."""
+    try:
+        from pydub import AudioSegment
+        ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'mp3'
+        seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
+        seg = seg.set_frame_rate(16000).set_channels(1)
+        buf = io.BytesIO()
+        seg.export(buf, format='wav')
+        return buf.getvalue()
+    except ImportError:
+        logger.warning('pydub not installed — sending raw audio to Google')
+        return None
+    except Exception as e:
+        logger.warning('Audio conversion failed (%s) — sending raw audio', e)
+        return None
+
+
+def build_config(audio_bytes, filename, language_code, converted):
+    if converted:
+        return speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=16000,
+            audio_channel_count=1,
+            language_code=language_code,
+            enable_automatic_punctuation=True,
+        )
+
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'mp3'
+    encoding_map = {
+        'mp3':  speech.RecognitionConfig.AudioEncoding.MP3,
+        'wav':  speech.RecognitionConfig.AudioEncoding.LINEAR16,
+        'webm': speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+        'ogg':  speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
+        'flac': speech.RecognitionConfig.AudioEncoding.FLAC,
+    }
+    params = {
+        'encoding': encoding_map.get(ext, speech.RecognitionConfig.AudioEncoding.MP3),
+        'language_code': language_code,
+        'enable_automatic_punctuation': True,
+    }
+    if ext == 'wav':
+        try:
+            with wave.open(io.BytesIO(audio_bytes)) as wf:
+                params['sample_rate_hertz'] = wf.getframerate()
+                if wf.getnchannels() > 1:
+                    params['audio_channel_count'] = wf.getnchannels()
+        except Exception:
+            params['sample_rate_hertz'] = 16000
+    return speech.RecognitionConfig(**params)
+
+
 def wait_for_operation(operation):
     deadline = time.monotonic() + MAX_WAIT_SECONDS
     while not operation.done():
         if time.monotonic() > deadline:
             raise TimeoutError(f'ประมวลผลเกิน {MAX_WAIT_SECONDS // 60} นาที กรุณาลองใหม่')
         time.sleep(POLL_INTERVAL)
-
     if operation.exception():
         raise operation.exception()
-
     return operation.result()
 
 
@@ -53,41 +95,28 @@ def process_transcription(transcription_id):
 
         audio_path = job.audio_file.path
         with open(audio_path, 'rb') as f:
-            audio_bytes = f.read()
+            raw_bytes = f.read()
 
-        logger.info('Transcription %s: %d bytes, file=%s', transcription_id, len(audio_bytes), job.filename)
+        logger.info('Transcription %s: %d bytes, file=%s', transcription_id, len(raw_bytes), job.filename)
 
-        if not audio_bytes:
+        if not raw_bytes:
             raise ValueError('ไฟล์เสียงว่างเปล่า กรุณาอัปโหลดใหม่')
 
-        ext = job.filename.rsplit('.', 1)[-1].lower() if '.' in job.filename else 'mp3'
-        encoding = ENCODING_MAP.get(ext, speech.RecognitionConfig.AudioEncoding.MP3)
-
-        params = {
-            'encoding': encoding,
-            'language_code': job.language,
-            'enable_automatic_punctuation': True,
-        }
-
-        if ext == 'wav':
-            try:
-                with wave.open(io.BytesIO(audio_bytes)) as wf:
-                    params['sample_rate_hertz'] = wf.getframerate()
-                    if wf.getnchannels() > 1:
-                        params['audio_channel_count'] = wf.getnchannels()
-            except Exception:
-                params['sample_rate_hertz'] = 16000
+        # Convert to WAV for best compatibility; fall back to raw if pydub unavailable
+        wav_bytes = to_wav_linear16(raw_bytes, job.filename)
+        audio_bytes = wav_bytes if wav_bytes else raw_bytes
+        converted = wav_bytes is not None
+        logger.info('Transcription %s: using %s encoding', transcription_id, 'LINEAR16/WAV' if converted else 'raw')
 
         client = get_client()
-        config = speech.RecognitionConfig(**params)
+        config = build_config(raw_bytes, job.filename, job.language, converted)
         audio = speech.RecognitionAudio(content=audio_bytes)
 
         logger.info('Transcription %s: submitting to Google Speech API...', transcription_id)
         operation = client.long_running_recognize(config=config, audio=audio)
-
         logger.info('Transcription %s: waiting for operation %s', transcription_id, operation.operation.name)
-        response = wait_for_operation(operation)
 
+        response = wait_for_operation(operation)
         logger.info('Transcription %s: got %d result segments', transcription_id, len(response.results))
 
         text = ' '.join(
