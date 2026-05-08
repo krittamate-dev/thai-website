@@ -3,7 +3,7 @@ import { getAccessToken } from '../utils/auth'
 import '../styles/speech.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
-const ACCEPTED = '.mp3,.wav,.webm,.ogg,.flac'
+const ACCEPTED = '.mp3,.m4a,.wav,.webm,.ogg,.flac'
 const MAX_SIZE = 10 * 1024 * 1024
 
 const STATUS_LABEL = {
@@ -152,7 +152,7 @@ export default function Speech() {
         <h3>คลิกหรือลากไฟล์มาวางที่นี่</h3>
         <p>รองรับไฟล์เสียงสูงสุด 10MB</p>
         <div className="file-types">
-          {['MP3', 'WAV', 'WebM', 'OGG', 'FLAC'].map(t => (
+          {['MP3', 'M4A', 'WAV', 'WebM', 'OGG', 'FLAC'].map(t => (
             <span key={t} className="badge">{t}</span>
           ))}
         </div>

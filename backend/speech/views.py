@@ -8,7 +8,8 @@ from .models import Transcription
 from .serializers import TranscriptionSerializer
 from .tasks import run_in_background
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+ALLOWED_EXTENSIONS = {'mp3', 'm4a', 'wav', 'webm', 'ogg', 'flac'}
 LANGUAGE_MAP = {'th': 'th-TH', 'en': 'en-US'}
 
 
@@ -20,8 +21,12 @@ def submit(request):
     if not audio_file:
         return Response({'error': 'กรุณาอัปโหลดไฟล์เสียง'}, status=status.HTTP_400_BAD_REQUEST)
 
+    ext = audio_file.name.rsplit('.', 1)[-1].lower() if '.' in audio_file.name else ''
+    if ext not in ALLOWED_EXTENSIONS:
+        return Response({'error': f'ไม่รองรับไฟล์ .{ext} รองรับ: mp3, m4a, wav, webm, ogg, flac'}, status=status.HTTP_400_BAD_REQUEST)
+
     if audio_file.size > MAX_FILE_SIZE:
-        return Response({'error': 'ไฟล์ขนาดใหญ่เกินไป (สูงสุด 10MB)'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': 'ไฟล์ขนาดใหญ่เกินไป (สูงสุด 20MB)'}, status=status.HTTP_400_BAD_REQUEST)
 
     lang_key = request.data.get('language', 'th')
     language_code = LANGUAGE_MAP.get(lang_key, 'th-TH')
