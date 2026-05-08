@@ -1,6 +1,5 @@
 import io
 import os
-import time
 import wave
 import tempfile
 import logging
@@ -12,8 +11,7 @@ from google.oauth2 import service_account
 
 logger = logging.getLogger(__name__)
 
-MAX_WAIT_SECONDS = 900   # 15 minutes max
-POLL_INTERVAL = 5        # check every 5 seconds
+CHUNK_SECONDS = 55   # stay under Google's 60s inline limit
 
 
 def get_client():
@@ -25,31 +23,26 @@ def get_client():
 
 
 def to_wav_linear16(audio_bytes, filename):
-    """Convert any audio to mono 16kHz WAV using ffmpeg (works on Python 3.13+)."""
+    """Convert any audio to mono 16kHz WAV using ffmpeg."""
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'mp3'
     tmp_in = tempfile.mktemp(suffix=f'.{ext}')
     tmp_out = tempfile.mktemp(suffix='.wav')
     try:
         with open(tmp_in, 'wb') as f:
             f.write(audio_bytes)
-
         result = subprocess.run(
             ['ffmpeg', '-i', tmp_in, '-ar', '16000', '-ac', '1', '-f', 'wav', tmp_out, '-y', '-loglevel', 'error'],
             capture_output=True,
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.decode())
-
         with open(tmp_out, 'rb') as f:
-            wav_bytes = f.read()
-
-        logger.info('Converted to WAV: %d bytes', len(wav_bytes))
-        return wav_bytes
+            return f.read()
     except FileNotFoundError:
-        logger.warning('ffmpeg not found — sending raw audio to Google')
+        logger.warning('ffmpeg not found — sending raw audio')
         return None
     except Exception as e:
-        logger.warning('Audio conversion failed: %s — sending raw audio', e)
+        logger.warning('Conversion failed: %s', e)
         return None
     finally:
         for p in (tmp_in, tmp_out):
@@ -59,48 +52,26 @@ def to_wav_linear16(audio_bytes, filename):
                 pass
 
 
-def build_config(raw_bytes, filename, language_code, converted):
-    if converted:
-        return speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=16000,
-            audio_channel_count=1,
-            language_code=language_code,
-            enable_automatic_punctuation=True,
-        )
-    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'mp3'
-    encoding_map = {
-        'mp3':  speech.RecognitionConfig.AudioEncoding.MP3,
-        'wav':  speech.RecognitionConfig.AudioEncoding.LINEAR16,
-        'webm': speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-        'ogg':  speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
-        'flac': speech.RecognitionConfig.AudioEncoding.FLAC,
-    }
-    params = {
-        'encoding': encoding_map.get(ext, speech.RecognitionConfig.AudioEncoding.MP3),
-        'language_code': language_code,
-        'enable_automatic_punctuation': True,
-    }
-    if ext == 'wav':
-        try:
-            with wave.open(io.BytesIO(raw_bytes)) as wf:
-                params['sample_rate_hertz'] = wf.getframerate()
-                if wf.getnchannels() > 1:
-                    params['audio_channel_count'] = wf.getnchannels()
-        except Exception:
-            params['sample_rate_hertz'] = 16000
-    return speech.RecognitionConfig(**params)
-
-
-def wait_for_operation(operation):
-    deadline = time.monotonic() + MAX_WAIT_SECONDS
-    while not operation.done():
-        if time.monotonic() > deadline:
-            raise TimeoutError(f'ประมวลผลเกิน {MAX_WAIT_SECONDS // 60} นาที กรุณาลองใหม่')
-        time.sleep(POLL_INTERVAL)
-    if operation.exception():
-        raise operation.exception()
-    return operation.result()
+def split_wav(wav_bytes):
+    """Split WAV into chunks of CHUNK_SECONDS seconds."""
+    chunks = []
+    with wave.open(io.BytesIO(wav_bytes)) as wf:
+        rate = wf.getframerate()
+        ch = wf.getnchannels()
+        sw = wf.getsampwidth()
+        chunk_frames = CHUNK_SECONDS * rate
+        while True:
+            frames = wf.readframes(chunk_frames)
+            if not frames:
+                break
+            buf = io.BytesIO()
+            with wave.open(buf, 'wb') as out:
+                out.setnchannels(ch)
+                out.setsampwidth(sw)
+                out.setframerate(rate)
+                out.writeframes(frames)
+            chunks.append(buf.getvalue())
+    return chunks
 
 
 def process_transcription(transcription_id):
@@ -118,29 +89,41 @@ def process_transcription(transcription_id):
         logger.info('Transcription %s: %d bytes, file=%s', transcription_id, len(raw_bytes), job.filename)
 
         if not raw_bytes:
-            raise ValueError('ไฟล์เสียงว่างเปล่า กรุณาอัปโหลดใหม่')
+            raise ValueError('ไฟล์เสียงว่างเปล่า')
 
         wav_bytes = to_wav_linear16(raw_bytes, job.filename)
-        audio_bytes = wav_bytes if wav_bytes else raw_bytes
-        converted = wav_bytes is not None
-        logger.info('Transcription %s: using %s encoding', transcription_id, 'LINEAR16/WAV' if converted else 'raw')
+        if not wav_bytes:
+            raise RuntimeError('แปลงไฟล์เสียงไม่สำเร็จ กรุณาตรวจสอบว่า ffmpeg ติดตั้งแล้ว')
+
+        chunks = split_wav(wav_bytes)
+        logger.info('Transcription %s: %d chunk(s) × %ds', transcription_id, len(chunks), CHUNK_SECONDS)
 
         client = get_client()
-        config = build_config(raw_bytes, job.filename, job.language, converted)
-        audio = speech.RecognitionAudio(content=audio_bytes)
-
-        logger.info('Transcription %s: submitting to Google Speech API...', transcription_id)
-        operation = client.long_running_recognize(config=config, audio=audio)
-        logger.info('Transcription %s: waiting for operation %s', transcription_id, operation.operation.name)
-
-        response = wait_for_operation(operation)
-        logger.info('Transcription %s: got %d result segments', transcription_id, len(response.results))
-
-        text = ' '.join(
-            result.alternatives[0].transcript
-            for result in response.results
-            if result.alternatives
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=16000,
+            audio_channel_count=1,
+            language_code=job.language,
+            enable_automatic_punctuation=True,
         )
+
+        all_text = []
+        for i, chunk in enumerate(chunks):
+            response = client.recognize(
+                config=config,
+                audio=speech.RecognitionAudio(content=chunk),
+            )
+            chunk_text = ' '.join(
+                r.alternatives[0].transcript
+                for r in response.results
+                if r.alternatives
+            )
+            if chunk_text:
+                all_text.append(chunk_text)
+            logger.info('Chunk %d/%d: %d chars', i + 1, len(chunks), len(chunk_text))
+
+        text = ' '.join(all_text)
+        logger.info('Transcription %s: done, total %d chars', transcription_id, len(text))
 
         job.status = 'done'
         job.result = text if text else 'ไม่พบเสียงพูดในไฟล์นี้'
