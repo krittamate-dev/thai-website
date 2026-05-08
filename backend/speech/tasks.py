@@ -1,5 +1,6 @@
 import io
 import os
+import time
 import wave
 import logging
 import threading
@@ -17,6 +18,9 @@ ENCODING_MAP = {
     'flac': speech.RecognitionConfig.AudioEncoding.FLAC,
 }
 
+MAX_WAIT_SECONDS = 900   # 15 minutes max
+POLL_INTERVAL = 5        # check every 5 seconds
+
 
 def get_client():
     credentials = service_account.Credentials.from_service_account_file(
@@ -24,6 +28,19 @@ def get_client():
         scopes=['https://www.googleapis.com/auth/cloud-platform'],
     )
     return speech.SpeechClient(credentials=credentials)
+
+
+def wait_for_operation(operation):
+    deadline = time.monotonic() + MAX_WAIT_SECONDS
+    while not operation.done():
+        if time.monotonic() > deadline:
+            raise TimeoutError(f'ประมวลผลเกิน {MAX_WAIT_SECONDS // 60} นาที กรุณาลองใหม่')
+        time.sleep(POLL_INTERVAL)
+
+    if operation.exception():
+        raise operation.exception()
+
+    return operation.result()
 
 
 def process_transcription(transcription_id):
@@ -34,7 +51,6 @@ def process_transcription(transcription_id):
         job.status = 'processing'
         job.save(update_fields=['status', 'updated_at'])
 
-        # Read directly from filesystem path — avoids FieldFile pointer issues
         audio_path = job.audio_file.path
         with open(audio_path, 'rb') as f:
             audio_bytes = f.read()
@@ -66,8 +82,11 @@ def process_transcription(transcription_id):
         config = speech.RecognitionConfig(**params)
         audio = speech.RecognitionAudio(content=audio_bytes)
 
+        logger.info('Transcription %s: submitting to Google Speech API...', transcription_id)
         operation = client.long_running_recognize(config=config, audio=audio)
-        response = operation.result(timeout=300)
+
+        logger.info('Transcription %s: waiting for operation %s', transcription_id, operation.operation.name)
+        response = wait_for_operation(operation)
 
         logger.info('Transcription %s: got %d result segments', transcription_id, len(response.results))
 
@@ -82,7 +101,6 @@ def process_transcription(transcription_id):
         job.audio_file = None
         job.save()
 
-        # Clean up audio file after saving job
         try:
             os.remove(audio_path)
         except OSError:
